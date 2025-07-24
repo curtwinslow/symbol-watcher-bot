@@ -1,37 +1,43 @@
-from flask import Flask, request
+import os
+from flask import Flask, request, jsonify
+from summarizer import summarize_messages
 from symbol_parser import extract_symbols
-from summarizer import summarize_mentions
-from db import store_mention
+from db import log_symbol_mention
 
 def create_app():
     app = Flask(__name__)
 
-    @app.route("/")
-    def index():
-        return "Symbol Watcher bot is alive!"
+    @app.route('/')
+    def health_check():
+        return 'Symbol Watcher is alive!'
 
-    @app.route("/slack/events", methods=["POST"])
-    def handle_event():
+    @app.route('/slack/events', methods=['POST'])
+    def slack_events():
         data = request.json
 
-        # Basic verification
-        if data.get("type") == "url_verification":
-            return data.get("challenge")
+        # Slack URL verification challenge
+        if data.get('type') == 'url_verification':
+            return jsonify({'challenge': data.get('challenge')})
 
-        # Handle Slack event callback
-        if "event" in data:
-            event = data["event"]
-            text = event.get("text", "")
-            user = event.get("user", "")
-            ts = event.get("ts", "")
-            channel = event.get("channel", "")
+        # Process event
+        event = data.get('event', {})
+        if event.get('type') == 'message' and 'text' in event:
+            text = event['text']
+            user = event.get('user')
+            channel = event.get('channel')
+            ts = event.get('ts')
 
-            # Extract symbols
             symbols = extract_symbols(text)
             if symbols:
-                summary = summarize_mentions(text, symbols)
-                store_mention(symbols, text, user, ts, channel, summary)
+                log_symbol_mention(user, channel, ts, text, symbols)
 
-        return "", 200
+        return jsonify({'status': 'ok'})
+
+    @app.route('/summarize', methods=['POST'])
+    def summarize():
+        payload = request.get_json()
+        messages = payload.get('messages', [])
+        summary = summarize_messages(messages)
+        return jsonify({'summary': summary})
 
     return app
