@@ -1,5 +1,4 @@
-slack_bolt
-Flask
-openai
-python-dotenv
-gunicorn
+Flask==2.3.3
+gunicorn==21.2.0
+slack_sdk==3.27.1
+python-dotenv==1.0.1

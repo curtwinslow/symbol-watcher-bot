@@ -1,43 +1,31 @@
-import os
 from flask import Flask, request, jsonify
 from summarizer import summarize_messages
-from symbol_parser import extract_symbols
-from db import log_symbol_mention
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+import os
 
-def create_app():
-    app = Flask(__name__)
+slack_token = os.environ.get("SLACK_BOT_TOKEN")
+client = WebClient(token=slack_token)
 
-    @app.route('/')
-    def health_check():
-        return 'Symbol Watcher is alive!'
+app = Flask(__name__)
 
-    @app.route('/slack/events', methods=['POST'])
-    def slack_events():
-        data = request.json
+@app.route("/", methods=["GET"])
+def health_check():
+    return "Symbol Watcher is live."
 
-        # Slack URL verification challenge
-        if data.get('type') == 'url_verification':
-            return jsonify({'challenge': data.get('challenge')})
+@app.route("/summarize", methods=["POST"])
+def summarize():
+    data = request.get_json()
+    if not data or "channel_id" not in data:
+        return jsonify({"error": "Missing channel_id"}), 400
 
-        # Process event
-        event = data.get('event', {})
-        if event.get('type') == 'message' and 'text' in event:
-            text = event['text']
-            user = event.get('user')
-            channel = event.get('channel')
-            ts = event.get('ts')
+    channel_id = data["channel_id"]
 
-            symbols = extract_symbols(text)
-            if symbols:
-                log_symbol_mention(user, channel, ts, text, symbols)
-
-        return jsonify({'status': 'ok'})
-
-    @app.route('/summarize', methods=['POST'])
-    def summarize():
-        payload = request.get_json()
-        messages = payload.get('messages', [])
+    try:
+        messages = []
+        response = client.conversations_history(channel=channel_id, limit=100)
+        messages.extend(response["messages"])
         summary = summarize_messages(messages)
-        return jsonify({'summary': summary})
-
-    return app
+        return jsonify({"summary": summary})
+    except SlackApiError as e:
+        return jsonify({"error": str(e)}), 500
