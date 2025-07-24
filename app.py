@@ -1,31 +1,31 @@
-from flask import Flask, request, jsonify
-from summarizer import summarize_messages
-from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
+from flask import Flask, request, redirect, jsonify
 import os
-
-slack_token = os.environ.get("SLACK_BOT_TOKEN")
-client = WebClient(token=slack_token)
+import requests
 
 app = Flask(__name__)
 
-@app.route("/", methods=["GET"])
-def health_check():
-    return "Symbol Watcher is live."
+SLACK_CLIENT_ID = os.getenv("SLACK_CLIENT_ID")
+SLACK_CLIENT_SECRET = os.getenv("SLACK_CLIENT_SECRET")
 
-@app.route("/summarize", methods=["POST"])
-def summarize():
-    data = request.get_json()
-    if not data or "channel_id" not in data:
-        return jsonify({"error": "Missing channel_id"}), 400
+@app.route("/slack/oauth/callback")
+def oauth_callback():
+    code = request.args.get("code")
+    if not code:
+        return "Missing code", 400
 
-    channel_id = data["channel_id"]
+    token_url = "https://slack.com/api/oauth.v2.access"
+    data = {
+        "client_id": SLACK_CLIENT_ID,
+        "client_secret": SLACK_CLIENT_SECRET,
+        "code": code,
+        "redirect_uri": "https://symbol-watcher.onrender.com/slack/oauth/callback"
+    }
 
-    try:
-        messages = []
-        response = client.conversations_history(channel=channel_id, limit=100)
-        messages.extend(response["messages"])
-        summary = summarize_messages(messages)
-        return jsonify({"summary": summary})
-    except SlackApiError as e:
-        return jsonify({"error": str(e)}), 500
+    response = requests.post(token_url, data=data)
+    token_data = response.json()
+
+    if not token_data.get("ok"):
+        return jsonify(token_data), 400
+
+    return "Slack app successfully authorized! ✅ You can now invite the bot to a channel."
+
