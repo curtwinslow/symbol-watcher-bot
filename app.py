@@ -1,58 +1,37 @@
-import os
-from slack_bolt import App
-from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request
-from dotenv import load_dotenv
 from symbol_parser import extract_symbols
-from summarizer import summarize_messages
-from db import store_message, get_messages_by_symbol
+from summarizer import summarize_mentions
+from db import store_mention
 
-# Load environment variables from .env
-load_dotenv()
+def create_app():
+    app = Flask(__name__)
 
-# Initialize Slack app with bot token and signing secret
-app = App(
-    token=os.environ["SLACK_BOT_TOKEN"],
-    signing_secret=os.environ["SLACK_SIGNING_SECRET"]
-)
+    @app.route("/")
+    def index():
+        return "Symbol Watcher bot is alive!"
 
-handler = SlackRequestHandler(app)
-flask_app = Flask(__name__)
+    @app.route("/slack/events", methods=["POST"])
+    def handle_event():
+        data = request.json
 
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
+        # Basic verification
+        if data.get("type") == "url_verification":
+            return data.get("challenge")
 
-@app.event("app_mention")
-def handle_mentions(body, say):
-    event = body.get("event", {})
-    user = event.get("user")
-    text = event.get("text")
-    channel = event.get("channel")
-    ts = event.get("ts")
+        # Handle Slack event callback
+        if "event" in data:
+            event = data["event"]
+            text = event.get("text", "")
+            user = event.get("user", "")
+            ts = event.get("ts", "")
+            channel = event.get("channel", "")
 
-    symbols = extract_symbols(text)
-    if symbols:
-        store_message(user, text, symbols, ts, channel)
-        say(f"Saved message with symbols: {', '.join(symbols)}")
-    else:
-        say("No valid symbols detected in your message.")
+            # Extract symbols
+            symbols = extract_symbols(text)
+            if symbols:
+                summary = summarize_mentions(text, symbols)
+                store_mention(symbols, text, user, ts, channel, summary)
 
-@app.command("/summary")
-def handle_summary(ack, respond, command):
-    ack()
-    text = command.get("text", "").strip().upper()
-    if not text:
-        respond("Please provide a symbol. Example: `/summary AAPL`")
-        return
-    messages = get_messages_by_symbol(text)
-    if not messages:
-        respond(f"No messages found for {text}.")
-        return
-    summary = summarize_messages(messages)
-    respond(f"*Summary for {text}:*\n{summary}")
+        return "", 200
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 3000))
-    flask_app.run(host="0.0.0.0", port=port)
-
+    return app
