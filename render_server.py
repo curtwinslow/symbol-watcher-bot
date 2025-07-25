@@ -1,4 +1,8 @@
-from app import app  # This assumes your Flask app object is named `app` in app.py
+from flask import Flask
+from slack_events import slack_events_bp  # 🔹 import the blueprint
+
+app = Flask(__name__)
+app.register_blueprint(slack_events_bp)  # 🔹 register the /slack/events route
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)  # Port can match Render’s default or be overridden
+    app.run(host="0.0.0.0", port=10000)
