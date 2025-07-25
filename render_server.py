@@ -1,8 +1,12 @@
 from flask import Flask
-from slack_events import slack_events_bp  # 🔹 import the blueprint
+from slack_events import slack_events_bp, fetch_bot_user_id
 
 app = Flask(__name__)
-app.register_blueprint(slack_events_bp)  # 🔹 register the /slack/events route
+app.register_blueprint(slack_events_bp)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+# 🔹 Fetch bot user ID once at startup
+fetch_bot_user_id()
+
+@app.route("/")
+def index():
+    return "Symbol Watcher is running"
