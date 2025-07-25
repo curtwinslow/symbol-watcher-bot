@@ -1,31 +1,26 @@
-from flask import Blueprint, request, make_response
-from slack_sdk.signature import SignatureVerifier
 import os
-from symbol_extractor import extract_symbols_from_text as extract_symbols
+import json
+from flask import Blueprint, request, make_response
+from symbol_extractor import extract_symbols
 
 slack_events_bp = Blueprint("slack_events", __name__)
-signature_verifier = SignatureVerifier(os.environ["SLACK_SIGNING_SECRET"])
 
 @slack_events_bp.route("/slack/events", methods=["POST"])
 def slack_events():
-    if not signature_verifier.is_valid_request(request.get_data(), request.headers):
-        return make_response("Invalid request signature", 403)
+    slack_event = request.get_json()
 
-    event_data = request.json
+    # URL verification challenge
+    if "type" in slack_event and slack_event["type"] == "url_verification":
+        return make_response(slack_event["challenge"], 200, {"content_type": "text/plain"})
 
-    # Respond to Slack URL verification challenge
-    if "challenge" in event_data:
-        return make_response(event_data["challenge"], 200, {"content_type": "application/json"})
+    # Event callback
+    if "event" in slack_event:
+        event = slack_event["event"]
 
-    # Process message events
-    if "event" in event_data:
-        event = event_data["event"]
-        if event.get("type") == "message" and "subtype" not in event:
-            text = event.get("text", "")
-            user = event.get("user")
-            channel = event.get("channel")
-
+        if event.get("type") == "message" and "text" in event:
+            text = event["text"]
             symbols = extract_symbols(text)
-            print(f"User {user} in channel {channel} mentioned symbols: {symbols}")
+            if symbols:
+                print(f"🔍 Extracted symbols: {symbols}")
 
-    return make_response("", 200)
+    return make_response("OK", 200)
