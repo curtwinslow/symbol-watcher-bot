@@ -19,9 +19,9 @@ def slack_events():
 
     data = request.json
 
-    # Slack URL verification challenge
+    # ✅ Slack URL verification challenge (fix: return proper JSON)
     if "type" in data and data["type"] == "url_verification":
-        return make_response(data["challenge"], 200)
+        return make_response({"challenge": data["challenge"]}, 200, {"Content-Type": "application/json"})
 
     # Handle message events
     if "event" in data:
