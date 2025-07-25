@@ -1,19 +1,27 @@
 import csv
-import os
 from datetime import datetime
+import os
 
-DB_FILE = "symbol_mentions.csv"
+CSV_FILE = "symbol_mentions.csv"
 
-def log_symbol_mention(symbol: str, user: str, text: str, timestamp: str):
-    file_exists = os.path.isfile(DB_FILE)
-    with open(DB_FILE, mode="a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
+def normalize(symbol):
+    return symbol.upper().replace(" ", "_").strip()
+
+def log_symbol_mention(symbol, channel, user, message):
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    normalized = normalize(symbol)
+
+    file_exists = os.path.isfile(CSV_FILE)
+
+    with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=["timestamp", "raw_symbol", "normalized_symbol", "channel", "user", "message"])
         if not file_exists:
-            writer.writerow(["timestamp", "symbol", "user", "text", "received_at"])
-        writer.writerow([
-            timestamp,
-            symbol,
-            user,
-            text,
-            datetime.utcnow().isoformat()
-        ])
+            writer.writeheader()
+        writer.writerow({
+            "timestamp": timestamp,
+            "raw_symbol": symbol,
+            "normalized_symbol": normalized,
+            "channel": channel,
+            "user": user,
+            "message": message
+        })
