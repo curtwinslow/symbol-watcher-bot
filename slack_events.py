@@ -1,38 +1,33 @@
+from flask import Blueprint, request, jsonify
 import os
-from flask import Blueprint, request, make_response
-from slack_sdk.web import WebClient
+import json
+import logging
+from symbol_extractor import extract_symbols_from_text as extract_symbols  # ✅ alias to expected name
+from slack_sdk import WebClient
 from slack_sdk.signature import SignatureVerifier
 
-from symbol_extractor import extract_symbols
-from db import log_symbol_mention
-
 slack_events_bp = Blueprint("slack_events", __name__)
-slack_token = os.environ["SLACK_BOT_TOKEN"]
-signing_secret = os.environ["SLACK_SIGNING_SECRET"]
-client = WebClient(token=slack_token)
-verifier = SignatureVerifier(signing_secret)
+client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
+signature_verifier = SignatureVerifier(os.environ["SLACK_SIGNING_SECRET"])
 
 @slack_events_bp.route("/slack/events", methods=["POST"])
 def slack_events():
-    if not verifier.is_valid_request(request.get_data(), request.headers):
-        return make_response("Invalid signature", 403)
+    if not signature_verifier.is_valid_request(request.get_data(), request.headers):
+        return "Invalid request signature", 403
 
-    data = request.json
+    payload = request.get_json()
+    if "challenge" in payload:
+        return jsonify({"challenge": payload["challenge"]})
 
-    # ✅ Slack URL verification challenge (fix: return proper JSON)
-    if "type" in data and data["type"] == "url_verification":
-        return make_response({"challenge": data["challenge"]}, 200, {"Content-Type": "application/json"})
+    event = payload.get("event", {})
+    if event.get("type") == "message" and "text" in event:
+        text = event["text"]
+        symbols = extract_symbols(text)
+        if symbols:
+            thread_ts = event.get("ts")
+            channel = event["channel"]
+            message = f"👀 Mentioned symbols: {', '.join(symbols)}"
+            client.chat_postMessage(channel=channel, text=message, thread_ts=thread_ts)
 
-    # Handle message events
-    if "event" in data:
-        event = data["event"]
-        if event.get("type") == "message" and not event.get("bot_id"):
-            text = event.get("text", "")
-            user = event.get("user", "")
-            ts = event.get("ts", "")
+    return "", 200
 
-            symbols = extract_symbols(text)
-            for symbol in symbols:
-                log_symbol_mention(symbol, user, text, ts)
-
-    return make_response("OK", 200)
