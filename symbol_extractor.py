@@ -1,30 +1,33 @@
 import re
 
-def extract_symbols_from_text(text):
-    symbols = set()
+# Matches: $TSLA, TSLA, TSLA.N, TSLA LN, GOGL/CMBT, etc.
+SYMBOL_PATTERN = re.compile(r"""
+    (?:\$)?                             # optional leading $
+    (?<!\w)                             # negative lookbehind (start of word)
+    (
+        [A-Z]{1,5}                      # base symbol
+        (?:[\s\.\/\-][A-Z]{1,4})?       # optional suffix or pair (e.g. LN, .N, /USD)
+    )
+    (?!\w)                              # negative lookahead (end of word)
+""", re.VERBOSE)
 
-    # Match $SYMBOL (e.g. $TSLA)
-    dollar_tickers = re.findall(r'\$(\b[A-Z]{1,6}\b)', text)
-    symbols.update(dollar_tickers)
 
-    # Match pair trades like GOOG/CMBT
-    pair_tickers = re.findall(r'\b([A-Z]{2,6})/([A-Z]{2,6})\b', text)
-    for left, right in pair_tickers:
-        symbols.add(left)
-        symbols.add(right)
+def normalize_symbol(symbol: str) -> str:
+    """Standardizes symbol formats."""
+    symbol = symbol.strip().upper()
 
-    # Match bare UPPERCASE tickers (2–6 letters), excluding stopwords
-    common_stopwords = {
-        "THE", "AND", "FOR", "WITH", "FROM", "THIS", "HAVE", "THAT", "HERE",
-        "LOOKS", "COULD", "SHOULD", "BREAK", "THEN", "WERE", "ANY"
-    }
-    bare_tickers = re.findall(r'\b([A-Z]{2,6})\b', text)
-    for ticker in bare_tickers:
-        if ticker not in common_stopwords and not ticker.startswith("HTTP"):
-            symbols.add(ticker)
+    # Fix spacing: 'INOV LN' → 'INOV.LN'
+    if ' ' in symbol:
+        parts = symbol.split()
+        if len(parts) == 2:
+            return f"{parts[0]}.{parts[1]}"
+    if '/' in symbol:
+        return symbol  # Allow pair trades like GOGL/CMBT
+    return symbol
 
-    # Match symbols with suffixes (e.g. INOV LN)
-    suffix_tickers = re.findall(r'\b([A-Z]{2,6} [A-Z]{2,4})\b', text)
-    symbols.update(suffix_tickers)
 
+def extract_symbols(text: str):
+    """Extract and normalize symbols from a Slack message string."""
+    matches = SYMBOL_PATTERN.findall(text)
+    symbols = {normalize_symbol(m) for m in matches}
     return list(symbols)
