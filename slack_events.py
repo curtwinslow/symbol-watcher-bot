@@ -1,123 +1,116 @@
 import os
+import json
 from flask import Blueprint, request, make_response
 from slack_sdk import WebClient
-from slack_sdk.errors import SlackApiError
+from slack_sdk.web import SlackResponse
 from slack_sdk.signature import SignatureVerifier
-from message_store import add_message, get_recent_messages
-from symbol_extractor import extract_symbols
 from openai import OpenAI
-from dotenv import load_dotenv
-
-load_dotenv()
+from symbol_extractor import extract_symbols
+from message_store import add_message, get_recent_messages_for_symbol
+from summarize import summarize_symbol_messages
 
 slack_events_bp = Blueprint("slack_events", __name__)
-client = WebClient(token=os.environ["SLACK_BOT_TOKEN"])
-signature_verifier = SignatureVerifier(signing_secret=os.environ["SLACK_SIGNING_SECRET"])
-openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-# Used during app startup
-bot_user_id = None
+slack_token = os.environ["SLACK_BOT_TOKEN"]
+signing_secret = os.environ["SLACK_SIGNING_SECRET"]
+client = WebClient(token=slack_token)
+verifier = SignatureVerifier(signing_secret=signing_secret)
+openai_client = OpenAI()  # Fixed: removed api_key argument
+
+BOT_USER_ID = None
+
+
+@slack_events_bp.before_app_first_request
 def fetch_bot_user_id():
-    global bot_user_id
-    auth_response = client.auth_test()
-    bot_user_id = auth_response["user_id"]
-    print(f"Bot user ID: {bot_user_id}")
+    global BOT_USER_ID
+    auth_response: SlackResponse = client.auth_test()
+    BOT_USER_ID = auth_response["user_id"]
+    print(f"Bot user ID: {BOT_USER_ID}")
+
 
 @slack_events_bp.route("/slack/events", methods=["POST"])
 def slack_events():
-    if not signature_verifier.is_valid_request(request.get_data(), request.headers):
+    if not verifier.is_valid_request(request.get_data(), request.headers):
         return make_response("Invalid signature", 403)
 
-    payload = request.json
-    if "type" in payload:
-        if payload["type"] == "url_verification":
-            return make_response(payload["challenge"], 200)
+    data = request.json
+    if data.get("type") == "url_verification":
+        return make_response(data.get("challenge"), 200, {"content_type": "text/plain"})
 
-    if "event" in payload:
-        event = payload["event"]
-        if (
-            event.get("type") == "message"
-            and "subtype" not in event
-            and event.get("user") != bot_user_id
-        ):
+    if data.get("type") == "event_callback":
+        event = data["event"]
+
+        if event.get("type") == "message" and not event.get("bot_id"):
             text = event.get("text", "")
             user = event.get("user")
             ts = event.get("ts")
             channel = event.get("channel")
 
             symbols = extract_symbols(text)
-            print(f"User {user} in channel {channel} mentioned symbols: {symbols}")
+            if symbols:
+                print(f"User {user} in channel {channel} mentioned symbols: {symbols}")
+                for symbol in symbols:
+                    add_message(symbol, text, user, ts, channel)
 
-            for symbol in symbols:
-                add_message(symbol, text, user, ts, channel)
-
-                try:
+                for symbol in symbols:
                     client.chat_postMessage(
                         channel=channel,
                         thread_ts=ts,
-                        text=f":mag: Click to summarize recent mentions of `{symbol}`",
+                        text=f":mag: Click below to summarize recent discussions about *{symbol.upper()}*.",
                         blocks=[
                             {
                                 "type": "section",
-                                "text": {"type": "mrkdwn", "text": f":mag: Click to summarize recent mentions of `{symbol}`"},
-                                "accessory": {
-                                    "type": "button",
-                                    "text": {"type": "plain_text", "text": "Summarize"},
-                                    "action_id": "summarize_symbol",
-                                    "value": f"{symbol}|{channel}|{ts}"
+                                "text": {
+                                    "type": "mrkdwn",
+                                    "text": f":mag: Click below to summarize recent discussions about *{symbol.upper()}*."
                                 }
+                            },
+                            {
+                                "type": "actions",
+                                "elements": [
+                                    {
+                                        "type": "button",
+                                        "text": {
+                                            "type": "plain_text",
+                                            "text": f"Summarize {symbol.upper()}",
+                                        },
+                                        "action_id": "summarize_symbol",
+                                        "value": json.dumps({
+                                            "symbol": symbol,
+                                            "channel": channel,
+                                            "thread_ts": ts
+                                        }),
+                                    }
+                                ]
                             }
                         ]
                     )
-                except SlackApiError as e:
-                    print(f"Error posting message: {e.response['error']}")
 
     return make_response("", 200)
+
 
 @slack_events_bp.route("/slack/interactions", methods=["POST"])
 def slack_interactions():
-    if not signature_verifier.is_valid_request(request.get_data(), request.headers):
+    if not verifier.is_valid_request(request.get_data(), request.headers):
         return make_response("Invalid signature", 403)
 
-    from urllib.parse import parse_qs
-    import json
-
-    payload = json.loads(parse_qs(request.get_data(as_text=True))["payload"][0])
+    payload = json.loads(request.form["payload"])
     if payload["type"] == "block_actions":
         action = payload["actions"][0]
         if action["action_id"] == "summarize_symbol":
-            symbol, channel, thread_ts = action["value"].split("|")
+            data = json.loads(action["value"])
+            symbol = data["symbol"]
+            channel = data["channel"]
+            thread_ts = data["thread_ts"]
 
-            messages = get_recent_messages(symbol)
-            summary = summarize_messages(messages)
+            messages = get_recent_messages_for_symbol(symbol)
+            summary = summarize_symbol_messages(symbol, messages, openai_client)
 
-            try:
-                client.chat_postMessage(
-                    channel=channel,
-                    thread_ts=thread_ts,
-                    text=f"*Summary for `{symbol}`:*\n{summary}"
-                )
-            except SlackApiError as e:
-                print(f"Error posting summary: {e.response['error']}")
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=f":memo: Summary for *{symbol.upper()}*:\n\n{summary}",
+            )
 
     return make_response("", 200)
-
-def summarize_messages(messages):
-    if not messages:
-        return "No recent messages found."
-
-    prompt = "Summarize the following messages mentioning a stock symbol:\n\n"
-    for msg in messages:
-        prompt += f"- {msg['user']} said: {msg['text']}\n"
-
-    try:
-        response = openai_client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        print(f"Error during summarization: {e}")
-        return "Error generating summary."
 
